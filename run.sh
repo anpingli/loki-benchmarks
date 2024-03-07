@@ -89,18 +89,17 @@ operator() {
         # Create namespaces and storage
         create_benchmarking_environment
         create_s3_storage $storage_bucket
-        
         # Deploy operator and Lokistack
         pushd ../loki/operator || exit 1
         if $IS_OPENSHIFT; then
             kubectl create namespace openshift-operators-redhat
             kubectl label ns/$BENCHMARK_NAMESPACE openshift.io/cluster-monitoring=true --overwrite 
-
-            make olm-deploy "REGISTRY_BASE=quay.io/$operator_registry" "VERSION=v0.0.1-$(git rev-parse --short HEAD)" VARIANT=openshift
+            pwd
+            make olm-deploy "REGISTRY_BASE=quay.io/$operator_registry" "VERSION=0.0.1-$(git rev-parse --short HEAD)" VARIANT=openshift
             ./hack/deploy-aws-storage-secret.sh $storage_bucket
             kubectl -n $BENCHMARK_NAMESPACE apply -f hack/lokistack_gateway_ocp.yaml
         else
-            make olm-deploy "REGISTRY_BASE=quay.io/$operator_registry" "VERSION=v0.0.1-$(git rev-parse --short HEAD)"
+            make olm-deploy "REGISTRY_BASE=quay.io/$operator_registry" "VERSION=0.0.1-$(git rev-parse --short HEAD)"
             kubectl -n $BENCHMARK_NAMESPACE apply -f hack/lokistack_gateway_dev.yaml
         fi
         popd
@@ -121,6 +120,35 @@ operator() {
     done
 }
 
+# prepare on an OpenShift cluster in which lokistack is enabled for benchmarking
+lokistack_aws() {
+    if $IS_OPENSHIFT; then
+        echo -e "\nOverwriting BENCHMARK_NAMESPACE"
+        BENCHMARK_NAMESPACE="openshift-logging"
+    fi
+    kubectl -n $BENCHMARK_NAMESPACE apply -f hack/loadclient-rbac.yaml
+    for scenario in $scenario_configuration_path/*.yaml; do
+        echo "##Execute scenario $scenario"
+        create_benchmarking_environment
+        sleep 10
+
+        #create_s3_storage $LOKI_STORAGE_BUCKET
+        base64_bucket_name=$(echo $LOKI_STORAGE_BUCKET|base64 -w 0)
+        kubectl -n $BENCHMARK_NAMESPACE patch secret s3-secret --type='json' -p='[{"op": "replace", "path": "/data/bucketnames", "value":"'${base64_bucket_name}'"}]'
+        kubectl -n $BENCHMARK_NAMESPACE apply -f "${benchmarking_configuration_path}/lokistack_dev.yaml"
+        sleep 10
+        wait_for_ready_loki_components
+
+        configure_prometheus
+        run_benchmark_suite $scenario
+
+        # Clean Up
+        destroy_benchmarking_environment
+        kubectl -n $BENCHMARK_NAMESPACE delete lokistack ${LOKI_COMPONENT_PREFIX}
+        kubectl -n $BENCHMARK_NAMESPACE delete pvc -l "app.kubernetes.io/instance"="lokistack-dev"
+        destroy_s3_storage $LOKI_STORAGE_BUCKET
+    done
+}
 create_benchmarking_environment() {
     echo -e "\nCreating output directory"
     mkdir -p $OUTPUT_DIRECTORY
@@ -134,7 +162,7 @@ create_benchmarking_environment() {
         $KIND create cluster
     fi
 
-    kubectl create namespace $BENCHMARK_NAMESPACE
+    kubectl create namespace $BENCHMARK_NAMESPACE || true
 
     if $USE_CADVISOR; then
          pushd ../cadvisor || exit 1
@@ -235,6 +263,8 @@ run_benchmark_suite() {
     create_benchmarking_file $scenario_file
 
     echo -e "\nRunning benchmark suite"
+    echo $GINKGO --output-dir=$report_directory --json-report="report.json" --timeout=4h ./benchmarks
+    pwd
     $GINKGO --output-dir=$report_directory --json-report="report.json" --timeout=4h ./benchmarks
 
     echo -e "\nMoving configuration file to report directory"
@@ -250,6 +280,7 @@ create_benchmarking_file() {
     echo -e "\nCreating benchmarking file"
 
     echo -e "\nCopying generator and querier configuration"
+    echo "$benchmarking_configuration_path"
     cat $benchmarking_configuration_path/generator.yaml > $benchmarking_configuration_file
     cat $benchmarking_configuration_path/querier.yaml >> $benchmarking_configuration_file
 
@@ -353,6 +384,10 @@ rhobs)
 
 operator)
     operator $2 $3
+    ;;
+
+lokistack)
+    lokistack_aws
     ;;
 
 help)

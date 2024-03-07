@@ -1,0 +1,22 @@
+apiVersion: loki.grafana.com/v1
+kind: LokiStack
+metadata:
+  name: lokistack-dev
+spec:
+  managementState: Managed
+  size: 1x.extra-small
+  storage:
+    secret:
+      name: s3-secret
+      type: s3
+  storageClassName: gp3-csi
+  tenants:
+    mode: openshift-logging
+  rules:
+    enabled: true
+    selector:
+      matchLabels:
+        openshift.io/cluster-monitoring: 'true'
+    namespaceSelector:
+      matchLabels:
+        openshift.io/cluster-monitoring: 'true'

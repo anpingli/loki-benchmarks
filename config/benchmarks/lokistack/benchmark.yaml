@@ -1,0 +1,30 @@
+generator:
+  namespace: openshift-logging
+  serviceAccount: loki-benchmarks-generator-sa
+  image: quay.io/openshift-logging/cluster-logging-load-client:latest
+  tenant: application
+  pushURL: https://lokistack-dev-gateway-http.openshift-logging.svc:8080/api/logs/v1/application/loki/api/v1/push
+querier:
+  namespace: openshift-logging
+  serviceAccount: loki-benchmarks-querier-sa
+  tenant: application
+  pullURL: https://lokistack-dev-gateway-http.openshift-logging.svc:8080/api/logs/v1/application
+metrics:
+  url: https://thanos-querier-openshift-monitoring.apps.anliperf.qe.devcluster.openshift.com
+  enableCadvisorMetrics: true
+  jobs:
+    distributor: lokistack-dev-distributor
+    ingester: lokistack-dev-ingester
+    querier: lokistack-dev-querier
+    queryFrontend: lokistack-dev-query-frontend
+    indexGateway: lokistack-dev-index-gateway
+scenarios:
+  queryPath:
+    enabled: true
+    description: "Query range 12 hours"
+    readers: 
+      replicas: 5
+      queries:
+        sumRateByLevel: 'sum by (level) (rate({client="promtail"} [1s]))'
+        sumRateErrorsOnly: 'sum(rate({client="promtail"} |= "level=error" [1s]))'
+      queryRange: "12h"
